@@ -1,6 +1,6 @@
 {
   "name": "opencode-mailbox",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "A simple mailbox system for sending and receiving messages between sessions",
   "type": "module",
   "main": "./dist/index.js",
@@ -16,7 +16,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "bun build ./index.ts --outdir ./dist --target bun && bun run build:types",
+    "build": "bun build ./index.ts --outdir ./dist --target bun --external better-sqlite3 && bun run build:types",
     "build:types": "tsc --emitDeclarationOnly",
     "start": "bun run build",
     "prepublishOnly": "bun run build"
