@@ -4,9 +4,9 @@ A simple mailbox system for sending and receiving messages between sessions.
 
 ## Description
 
-This OpenCode plugin provides a lightweight mailbox system that allows sessions to send messages to each other asynchronously. Messages are stored efficiently, indexed first by recipient and then by timestamp.
+This OpenCode plugin provides a lightweight mailbox system that allows sessions to send messages to each other asynchronously. Messages are stored in a SQLite database with proper indexing for fast lookups.
 
-**IMPORTANT: all mail is stored in ~/.config/opencode/mailbox.json.  this isn't efficient or secure for anything important**
+**NOTE: Mail is stored in `~/.config/opencode/mailbox.db`**
 
 ## Installation
 
@@ -60,9 +60,10 @@ Stop all mail watching for the current session.
 
 ## Storage
 
-Mail data is persisted in the OpenCode config directory as `mailbox.json`. The storage is optimized with an index structure:
-- First index: recipient (who the mail is to)
-- Second index: timestamp (when the mail was received)
+Mail data is persisted in a SQLite database at `~/.config/opencode/mailbox.db`. The database includes:
+- Indexed `recipient` column for fast recipient lookups
+- Indexed `read` status for efficient watch queries
+- WAL (Write-Ahead Logging) mode for better concurrency
 
 ## Session Management
 

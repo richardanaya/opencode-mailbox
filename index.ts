@@ -1,7 +1,7 @@
 import type { Plugin } from "@opencode-ai/plugin";
 import type { createOpencodeClient } from "@opencode-ai/sdk";
-import * as fs from "fs";
 import * as path from "path";
+import Database from "better-sqlite3";
 
 // =============================================================================
 // Types
@@ -14,56 +14,99 @@ interface MailMessage {
   read: boolean;
 }
 
-interface MailboxStorage {
-  [recipient: string]: {
-    [timestamp: number]: MailMessage;
-  };
-}
-
-
-
-type SessionClient = ReturnType<typeof createOpencodeClient>;
-
-// Config type for the config hook (server config with experimental fields)
-interface ServerConfig {
-  experimental?: {
-    primary_tools?: string[];
-    [key: string]: unknown;
-  };
-  [key: string]: unknown;
-}
-
 // =============================================================================
-// Storage
+// Database
 // =============================================================================
 
-let mailboxFile: string | null = null;
+let dbFile: string | null = null;
+let db: Database.Database | null = null;
 
 // Track active watch intervals (in-memory only)
 const activeWatches = new Map<string, { interval: NodeJS.Timeout; instructions: string }>();
 
-async function getMailboxFile(client: SessionClient): Promise<string> {
-  if (!mailboxFile) {
+async function getDbFile(client: ReturnType<typeof createOpencodeClient>): Promise<string> {
+  if (!dbFile) {
     const result = await client.path.get();
-    mailboxFile = path.join(result.data!.config, "mailbox.json");
+    dbFile = path.join(result.data!.config, "mailbox.db");
   }
-  return mailboxFile;
+  return dbFile;
 }
 
-async function loadMailbox(client: SessionClient): Promise<MailboxStorage> {
-  const file = await getMailboxFile(client);
-  try {
-    if (fs.existsSync(file)) {
-      const data = JSON.parse(fs.readFileSync(file, "utf-8")) as MailboxStorage;
-      return data;
-    }
-  } catch {}
-  return {};
+async function getDatabase(client: ReturnType<typeof createOpencodeClient>): Promise<Database.Database> {
+  if (!db) {
+    const file = await getDbFile(client);
+    db = new Database(file);
+    
+    // Enable WAL mode for better concurrency
+    db.pragma("journal_mode = WAL");
+    
+    // Create the messages table if it doesn't exist
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        recipient TEXT NOT NULL,
+        sender TEXT NOT NULL,
+        message TEXT NOT NULL,
+        timestamp INTEGER NOT NULL,
+        read INTEGER NOT NULL DEFAULT 0
+      )
+    `);
+    
+    // Create index on recipient for fast lookups
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_messages_recipient ON messages(recipient)
+    `);
+    
+    // Create index on read status for watch queries
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_messages_read ON messages(recipient, read)
+    `);
+    
+  }
+  return db;
 }
 
-async function saveMailbox(client: SessionClient, mailbox: MailboxStorage) {
-  const file = await getMailboxFile(client);
-  fs.writeFileSync(file, JSON.stringify(mailbox, null, 2));
+async function addMessage(
+  client: ReturnType<typeof createOpencodeClient>,
+  recipient: string,
+  sender: string,
+  message: string,
+  timestamp: number
+): Promise<void> {
+  const database = await getDatabase(client);
+  const stmt = database.prepare(`
+    INSERT INTO messages (recipient, sender, message, timestamp, read)
+    VALUES (?, ?, ?, ?, 0)
+  `);
+  stmt.run(recipient.toLowerCase(), sender.toLowerCase(), message, timestamp);
+}
+
+async function getUnreadMessages(
+  client: ReturnType<typeof createOpencodeClient>,
+  recipient: string
+): Promise<MailMessage[]> {
+  const database = await getDatabase(client);
+  const stmt = database.prepare(`
+    SELECT sender as from, message, timestamp, read
+    FROM messages
+    WHERE recipient = ? AND read = 0
+    ORDER BY timestamp ASC
+  `);
+  return stmt.all(recipient.toLowerCase()) as MailMessage[];
+}
+
+async function markMessageAsRead(
+  client: ReturnType<typeof createOpencodeClient>,
+  recipient: string,
+  timestamp: number
+): Promise<void> {
+  const database = await getDatabase(client);
+  const stmt = database.prepare(`
+    UPDATE messages
+    SET read = 1
+    WHERE recipient = ? AND timestamp = ?
+  `);
+  stmt.run(recipient.toLowerCase(), timestamp);
 }
 
 // =============================================================================
@@ -72,10 +115,10 @@ async function saveMailbox(client: SessionClient, mailbox: MailboxStorage) {
 
 /**
  * Start a timer to watch for unread mail for a specific recipient.
- * Polls every 2 seconds and injects new messages into the session.
+ * Polls every 5 seconds and injects new messages into the session.
  */
 function startMailWatch(
-  client: SessionClient,
+  client: ReturnType<typeof createOpencodeClient>,
   recipient: string,
   sessionId: string,
   instructions: string
@@ -87,7 +130,6 @@ function startMailWatch(
 
   const interval = setInterval(async () => {
     try {
-      const mailbox = await loadMailbox(client);
       const watch = activeWatches.get(recipient);
       
       // Watch was stopped
@@ -95,29 +137,17 @@ function startMailWatch(
         return;
       }
 
-      const recipientMailbox = mailbox[recipient];
-      if (!recipientMailbox) {
-        return; // No mail for this recipient yet
+      // Get unread messages directly from database
+      const unreadMessages = await getUnreadMessages(client, recipient);
+      
+      if (unreadMessages.length === 0) {
+        return;
       }
-
-      // Find all unread messages
-      const unreadMessages: MailMessage[] = [];
-      for (const [timestamp, message] of Object.entries(recipientMailbox)) {
-        if (!message.read) {
-          unreadMessages.push(message);
-        }
-      }
-
-      // Sort by timestamp (oldest first)
-      unreadMessages.sort((a, b) => a.timestamp - b.timestamp);
 
       // Process each unread message
       for (const message of unreadMessages) {
-        // Mark as read
-        recipientMailbox[message.timestamp].read = true;
-        
-        // Save immediately to prevent double-processing
-        await saveMailbox(client, mailbox);
+        // Mark as read immediately to prevent double-processing
+        await markMessageAsRead(client, recipient, message.timestamp);
 
         // Inject the message into the session
         await injectMailMessage(
@@ -156,7 +186,7 @@ function stopMailWatch(recipient: string): void {
  * without noReply: true, or by using session.resume if available.
  */
 async function injectMailMessage(
-  client: SessionClient,
+  client: ReturnType<typeof createOpencodeClient>,
   sessionId: string,
   recipient: string,
   message: MailMessage,
@@ -226,26 +256,12 @@ const mailboxPlugin: Plugin = async (ctx) => {
       message: z.string().describe("Message content to send"),
     },
     async execute(args) {
-      const mailbox = await loadMailbox(client);
-      
       const to = args.to.toLowerCase();
       const from = args.from.toLowerCase();
       const timestamp = Date.now();
       
-      // Initialize recipient's mailbox if needed
-      if (!mailbox[to]) {
-        mailbox[to] = {};
-      }
-      
-      // Store the message
-      mailbox[to][timestamp] = {
-        from,
-        message: args.message,
-        timestamp,
-        read: false,
-      };
-      
-      await saveMailbox(client, mailbox);
+      // Store the message in SQLite
+      await addMessage(client, to, from, args.message, timestamp);
       
       return `Mail sent to "${args.to}" from "${args.from}" at ${new Date(timestamp).toISOString()}`;
     },
@@ -297,7 +313,7 @@ const mailboxPlugin: Plugin = async (ctx) => {
     },
 
     // Hook: Add tools to primary_tools config
-    config: async (input: ServerConfig) => {
+    config: async (input: { experimental?: { primary_tools?: string[]; [key: string]: unknown }; [key: string]: unknown }) => {
       input.experimental ??= {};
       input.experimental.primary_tools ??= [];
       input.experimental.primary_tools.push("send_mail", "watch_unread_mail", "stop_watching_mail");
