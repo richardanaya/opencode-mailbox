@@ -6,6 +6,8 @@ A simple mailbox system for sending and receiving messages between sessions.
 
 This OpenCode plugin provides a lightweight mailbox system that allows sessions to send messages to each other asynchronously. Messages are stored efficiently, indexed first by recipient and then by timestamp.
 
+**IMPORTANT: all mail is stored in ~/.config/opencode/mailbox.json.  this isn't efficient or secure for anything important**
+
 ## Installation
 
 ```bash
