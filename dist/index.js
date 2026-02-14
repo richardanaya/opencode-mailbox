@@ -12678,7 +12678,7 @@ var init_dist = __esm(() => {
 
 // index.ts
 import * as path from "path";
-import Database from "better-sqlite3";
+import { Database } from "bun:sqlite";
 var dbFile = null;
 var db = null;
 var activeWatches = new Map;
@@ -12693,7 +12693,7 @@ async function getDatabase(client) {
   if (!db) {
     const file2 = await getDbFile(client);
     db = new Database(file2);
-    db.pragma("journal_mode = WAL");
+    db.run("PRAGMA journal_mode = WAL");
     db.exec(`
       CREATE TABLE IF NOT EXISTS messages (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -12724,7 +12724,7 @@ async function addMessage(client, recipient, sender, message, timestamp) {
 async function getUnreadMessages(client, recipient) {
   const database = await getDatabase(client);
   const stmt = database.prepare(`
-    SELECT sender as from, message, timestamp, read
+    SELECT sender as "from", message, timestamp, read
     FROM messages
     WHERE recipient = ? AND read = 0
     ORDER BY timestamp ASC

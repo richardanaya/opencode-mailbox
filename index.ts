@@ -1,7 +1,7 @@
 import type { Plugin } from "@opencode-ai/plugin";
 import type { createOpencodeClient } from "@opencode-ai/sdk";
 import * as path from "path";
-import Database from "better-sqlite3";
+import { Database } from "bun:sqlite";
 
 // =============================================================================
 // Types
@@ -19,7 +19,7 @@ interface MailMessage {
 // =============================================================================
 
 let dbFile: string | null = null;
-let db: Database.Database | null = null;
+let db: Database | null = null;
 
 // Track active watch intervals (in-memory only)
 const activeWatches = new Map<string, { interval: NodeJS.Timeout; instructions: string }>();
@@ -32,13 +32,13 @@ async function getDbFile(client: ReturnType<typeof createOpencodeClient>): Promi
   return dbFile;
 }
 
-async function getDatabase(client: ReturnType<typeof createOpencodeClient>): Promise<Database.Database> {
+async function getDatabase(client: ReturnType<typeof createOpencodeClient>): Promise<Database> {
   if (!db) {
     const file = await getDbFile(client);
     db = new Database(file);
     
     // Enable WAL mode for better concurrency
-    db.pragma("journal_mode = WAL");
+    db.run("PRAGMA journal_mode = WAL");
     
     // Create the messages table if it doesn't exist
     db.exec(`
@@ -87,7 +87,7 @@ async function getUnreadMessages(
 ): Promise<MailMessage[]> {
   const database = await getDatabase(client);
   const stmt = database.prepare(`
-    SELECT sender as from, message, timestamp, read
+    SELECT sender as "from", message, timestamp, read
     FROM messages
     WHERE recipient = ? AND read = 0
     ORDER BY timestamp ASC
