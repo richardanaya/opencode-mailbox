@@ -249,7 +249,7 @@ const mailboxPlugin: Plugin = async (ctx) => {
 
   // Create tools with access to client via closure
   const sendMailTool = tool({
-    description: "Send a message to a recipient's mailbox",
+    description: "Send a message to a recipient's mailbox. Note: The parameters 'to' and 'from' do NOT have to be an email. It can just be a name that the recipient watches for (e.g. 'samus').",
     args: {
       to: z.string().describe("Recipient name. Note, this does NOT have to be an email. It can just be a name that the recipient watches for it (e.g. 'samus')."),
       from: z.string().describe("Sender name. Note, this does NOT have to be an email. It can just be a name that the sender wants to appear as (e.g. 'link')."),
@@ -268,7 +268,7 @@ const mailboxPlugin: Plugin = async (ctx) => {
   });
 
   const watchUnreadMailTool = tool({
-    description: "Create a hook that auto-injects messages when they are received for a specific name and can specify what should be done with the messages",
+    description: "Create a hook that auto-injects messages when they are received for a specific name and can specify what should be done with the messages. Note: The parameters 'name' does NOT have to be an email. It can just be a name that the recipient watches for (e.g. 'samus').",
     args: {
       name: z.string().describe("Name of the recipient to watch. Note: this does NOT have to be an email. It can just be a name that the sender uses (e.g. 'samus')."),
       "what-to-do-with-it": z.string().describe("Instructions on how to process received messages"),

@@ -12815,7 +12815,7 @@ var mailboxPlugin = async (ctx) => {
   const { tool: tool3 } = await Promise.resolve().then(() => (init_dist(), exports_dist));
   const z = tool3.schema;
   const sendMailTool = tool3({
-    description: "Send a message to a recipient's mailbox",
+    description: "Send a message to a recipient's mailbox. Note: The parameters 'to' and 'from' do NOT have to be an email. It can just be a name that the recipient watches for (e.g. 'samus').",
     args: {
       to: z.string().describe("Recipient name. Note, this does NOT have to be an email. It can just be a name that the recipient watches for it (e.g. 'samus')."),
       from: z.string().describe("Sender name. Note, this does NOT have to be an email. It can just be a name that the sender wants to appear as (e.g. 'link')."),
@@ -12830,7 +12830,7 @@ var mailboxPlugin = async (ctx) => {
     }
   });
   const watchUnreadMailTool = tool3({
-    description: "Create a hook that auto-injects messages when they are received for a specific name and can specify what should be done with the messages",
+    description: "Create a hook that auto-injects messages when they are received for a specific name and can specify what should be done with the messages. Note: The parameters 'name' does NOT have to be an email. It can just be a name that the recipient watches for (e.g. 'samus').",
     args: {
       name: z.string().describe("Name of the recipient to watch. Note: this does NOT have to be an email. It can just be a name that the sender uses (e.g. 'samus')."),
       "what-to-do-with-it": z.string().describe("Instructions on how to process received messages")
