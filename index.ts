@@ -22,9 +22,17 @@ let dbFile: string | null = null;
 let db: Database | null = null;
 
 // Track active watch intervals (in-memory only)
-const activeWatches = new Map<string, { interval: NodeJS.Timeout; instructions: string }>();
+// recipient -> watch info with reference count (shared across sessions)
+const activeWatches = new Map<
+  string,
+  { interval: NodeJS.Timeout; instructions: string; refCount: number }
+>();
+// sessionId -> Set of recipients this session is watching
+const watchesBySession = new Map<string, Set<string>>();
 
-async function getDbFile(client: ReturnType<typeof createOpencodeClient>): Promise<string> {
+async function getDbFile(
+  client: ReturnType<typeof createOpencodeClient>,
+): Promise<string> {
   if (!dbFile) {
     const result = await client.path.get();
     dbFile = path.join(result.data!.config, "mailbox.db");
@@ -32,14 +40,16 @@ async function getDbFile(client: ReturnType<typeof createOpencodeClient>): Promi
   return dbFile;
 }
 
-async function getDatabase(client: ReturnType<typeof createOpencodeClient>): Promise<Database> {
+async function getDatabase(
+  client: ReturnType<typeof createOpencodeClient>,
+): Promise<Database> {
   if (!db) {
     const file = await getDbFile(client);
     db = new Database(file);
-    
+
     // Enable WAL mode for better concurrency
     db.run("PRAGMA journal_mode = WAL");
-    
+
     // Create the messages table if it doesn't exist
     db.exec(`
       CREATE TABLE IF NOT EXISTS messages (
@@ -51,17 +61,16 @@ async function getDatabase(client: ReturnType<typeof createOpencodeClient>): Pro
         read INTEGER NOT NULL DEFAULT 0
       )
     `);
-    
+
     // Create index on recipient for fast lookups
     db.exec(`
       CREATE INDEX IF NOT EXISTS idx_messages_recipient ON messages(recipient)
     `);
-    
+
     // Create index on read status for watch queries
     db.exec(`
       CREATE INDEX IF NOT EXISTS idx_messages_read ON messages(recipient, read)
     `);
-    
   }
   return db;
 }
@@ -71,7 +80,7 @@ async function addMessage(
   recipient: string,
   sender: string,
   message: string,
-  timestamp: number
+  timestamp: number,
 ): Promise<void> {
   const database = await getDatabase(client);
   const stmt = database.prepare(`
@@ -83,7 +92,7 @@ async function addMessage(
 
 async function getUnreadMessages(
   client: ReturnType<typeof createOpencodeClient>,
-  recipient: string
+  recipient: string,
 ): Promise<MailMessage[]> {
   const database = await getDatabase(client);
   const stmt = database.prepare(`
@@ -98,7 +107,7 @@ async function getUnreadMessages(
 async function markMessageAsRead(
   client: ReturnType<typeof createOpencodeClient>,
   recipient: string,
-  timestamp: number
+  timestamp: number,
 ): Promise<void> {
   const database = await getDatabase(client);
   const stmt = database.prepare(`
@@ -121,17 +130,25 @@ function startMailWatch(
   client: ReturnType<typeof createOpencodeClient>,
   recipient: string,
   sessionId: string,
-  instructions: string
+  instructions: string,
 ): void {
-  // Don't start multiple watches for the same recipient
-  if (activeWatches.has(recipient)) {
+  // Check if already watching this recipient
+  const existingWatch = activeWatches.get(recipient);
+  if (existingWatch) {
+    // Increment reference count since another session is interested
+    existingWatch.refCount++;
+
+    // Track that this session owns this watch too
+    const sessionWatches = watchesBySession.get(sessionId) ?? new Set();
+    sessionWatches.add(recipient);
+    watchesBySession.set(sessionId, sessionWatches);
     return;
   }
 
   const interval = setInterval(async () => {
     try {
       const watch = activeWatches.get(recipient);
-      
+
       // Watch was stopped
       if (!watch) {
         return;
@@ -139,7 +156,7 @@ function startMailWatch(
 
       // Get unread messages directly from database
       const unreadMessages = await getUnreadMessages(client, recipient);
-      
+
       if (unreadMessages.length === 0) {
         return;
       }
@@ -155,7 +172,7 @@ function startMailWatch(
           sessionId,
           recipient,
           message,
-          instructions
+          instructions,
         );
       }
     } catch (error) {
@@ -163,7 +180,12 @@ function startMailWatch(
     }
   }, 5000); // Poll every 5 seconds
 
-  activeWatches.set(recipient, { interval, instructions });
+  activeWatches.set(recipient, { interval, instructions, refCount: 1 });
+
+  // Track that this session owns this watch
+  const sessionWatches = watchesBySession.get(sessionId) ?? new Set();
+  sessionWatches.add(recipient);
+  watchesBySession.set(sessionId, sessionWatches);
 }
 
 /**
@@ -180,7 +202,7 @@ function stopMailWatch(recipient: string): void {
 /**
  * Inject a mail message into a session using client.session.prompt()
  * This mimics how pocket-universe injects messages.
- * 
+ *
  * IMPORTANT: After injecting the message, we also need to "wake up" the session
  * so it starts processing. This is done by calling session.prompt() again
  * without noReply: true, or by using session.resume if available.
@@ -190,10 +212,10 @@ async function injectMailMessage(
   sessionId: string,
   recipient: string,
   message: MailMessage,
-  instructions: string
+  instructions: string,
 ): Promise<void> {
   const timestamp = new Date(message.timestamp).toISOString();
-  
+
   // Format the injected message
   const injectedText = `[MAIL] From: ${message.from}\nTo: ${recipient}\nTime: ${timestamp}\n\n${message.message}\n\n[Instructions: ${instructions}]`;
 
@@ -223,12 +245,20 @@ async function injectMailMessage(
         await client.session.prompt({
           path: { id: sessionId },
           body: {
-            parts: [{ type: "text" as const, text: "You have new mail. Please review the injected message above and respond accordingly." }],
+            parts: [
+              {
+                type: "text" as const,
+                text: "You have new mail. Please review the injected message above and respond accordingly.",
+              },
+            ],
           },
         });
       }
     } catch (wakeError) {
-      console.warn(`[Mailbox] Failed to wake up session ${sessionId}:`, wakeError);
+      console.warn(
+        `[Mailbox] Failed to wake up session ${sessionId}:`,
+        wakeError,
+      );
       // Don't fail the injection if wake-up fails - the message is still in history
     }
   } catch (error) {
@@ -249,57 +279,86 @@ const mailboxPlugin: Plugin = async (ctx) => {
 
   // Create tools with access to client via closure
   const sendMailTool = tool({
-    description: "Send a message to a recipient's mailbox. Note: The parameters 'to' and 'from' do NOT have to be an email. It can just be a name that the recipient watches for (e.g. 'samus').",
+    description:
+      "Send a message to a recipient's mailbox. Note: The parameters 'to' and 'from' do NOT have to be an email. It can just be a name that the recipient watches for (e.g. 'samus').",
     args: {
-      to: z.string().describe("Recipient name. Note, this does NOT have to be an email. It can just be a name that the recipient watches for it (e.g. 'samus')."),
-      from: z.string().describe("Sender name. Note, this does NOT have to be an email. It can just be a name that the sender wants to appear as (e.g. 'link')."),
+      to: z
+        .string()
+        .describe(
+          "Recipient name. Note, this does NOT have to be an email. It can just be a name that the recipient watches for it (e.g. 'samus').",
+        ),
+      from: z
+        .string()
+        .describe(
+          "Sender name. Note, this does NOT have to be an email. It can just be a name that the sender wants to appear as (e.g. 'link').",
+        ),
       message: z.string().describe("Message content to send"),
     },
     async execute(args) {
       const to = args.to.toLowerCase();
       const from = args.from.toLowerCase();
       const timestamp = Date.now();
-      
+
       // Store the message in SQLite
       await addMessage(client, to, from, args.message, timestamp);
-      
+
       return `Mail sent to "${args.to}" from "${args.from}" at ${new Date(timestamp).toISOString()}`;
     },
   });
 
   const watchUnreadMailTool = tool({
-    description: "Create a hook that auto-injects messages when they are received for a specific name and can specify what should be done with the messages. Note: The parameters 'name' does NOT have to be an email. It can just be a name that the recipient watches for (e.g. 'samus').",
+    description:
+      "Create a hook that auto-injects messages when they are received for a specific name and can specify what should be done with the messages. Note: The parameters 'name' does NOT have to be an email. It can just be a name that the recipient watches for (e.g. 'samus').",
     args: {
-      name: z.string().describe("Name of the recipient to watch. Note: this does NOT have to be an email. It can just be a name that the sender uses (e.g. 'samus')."),
-      "what-to-do-with-it": z.string().describe("Instructions on how to process received messages"),
+      name: z
+        .string()
+        .describe(
+          "Name of the recipient to watch. Note: this does NOT have to be an email. It can just be a name that the sender uses (e.g. 'samus').",
+        ),
+      "what-to-do-with-it": z
+        .string()
+        .describe("Instructions on how to process received messages"),
     },
     async execute(args, toolCtx) {
       const name = args.name.toLowerCase();
       const sessionId = toolCtx.sessionID;
-      
+
       // Start the timer to watch for mail (if not already watching)
       startMailWatch(client, name, sessionId, args["what-to-do-with-it"]);
-      
+
       return `Watch created for "${args.name}". New messages will be auto-injected into this session with instructions: ${args["what-to-do-with-it"]}`;
     },
   });
 
   const stopWatchingMailTool = tool({
-    description: "Stop all mail watching",
+    description: "Stop all mail watching for this session",
     args: {},
-    async execute() {
+    async execute(_args, toolCtx) {
+      const sessionId = toolCtx.sessionID;
       const stoppedWatches: string[] = [];
-      
-      // Stop all active watches
-      for (const recipient of activeWatches.keys()) {
-        stopMailWatch(recipient);
-        stoppedWatches.push(recipient);
+
+      // Get watches belonging to this session
+      const sessionWatches = watchesBySession.get(sessionId);
+
+      if (sessionWatches) {
+        // Stop each watch this session owned
+        for (const recipient of sessionWatches) {
+          const watch = activeWatches.get(recipient);
+          if (watch) {
+            watch.refCount--;
+            if (watch.refCount <= 0) {
+              stopMailWatch(recipient);
+            }
+            stoppedWatches.push(recipient);
+          }
+        }
+        watchesBySession.delete(sessionId);
       }
-      
+
       if (stoppedWatches.length === 0) {
-        return "No active mail watches found.";
+        return "No active mail watches found for this session.";
       }
-      
+
       return `Stopped watching mail for: ${stoppedWatches.join(", ")}`;
     },
   });
@@ -313,19 +372,41 @@ const mailboxPlugin: Plugin = async (ctx) => {
     },
 
     // Hook: Add tools to primary_tools config
-    config: async (input: { experimental?: { primary_tools?: string[]; [key: string]: unknown }; [key: string]: unknown }) => {
+    config: async (input: {
+      experimental?: { primary_tools?: string[]; [key: string]: unknown };
+      [key: string]: unknown;
+    }) => {
       input.experimental ??= {};
       input.experimental.primary_tools ??= [];
-      input.experimental.primary_tools.push("send_mail", "watch_unread_mail", "stop_watching_mail");
+      input.experimental.primary_tools.push(
+        "send_mail",
+        "watch_unread_mail",
+        "stop_watching_mail",
+      );
     },
 
-    // Hook: Clean up all watches when session ends
+    // Hook: Clean up watches when session ends
     hooks: {
-      "session.end": async () => {
-        // Stop all watches for this session
-        for (const recipient of activeWatches.keys()) {
-          stopMailWatch(recipient);
+      "session.end": async (input: { sessionID: string }) => {
+        const sessionId = input.sessionID;
+
+        // Get watches belonging to this session
+        const sessionWatches = watchesBySession.get(sessionId);
+        if (!sessionWatches) return;
+
+        // For each watch this session owned, decrement ref count
+        for (const recipient of sessionWatches) {
+          const watch = activeWatches.get(recipient);
+          if (watch) {
+            watch.refCount--;
+            // Only stop the watch if no other sessions are watching
+            if (watch.refCount <= 0) {
+              stopMailWatch(recipient);
+            }
+          }
         }
+
+        watchesBySession.delete(sessionId);
       },
     },
   };

@@ -12682,6 +12682,7 @@ import { Database } from "bun:sqlite";
 var dbFile = null;
 var db = null;
 var activeWatches = new Map;
+var watchesBySession = new Map;
 async function getDbFile(client) {
   if (!dbFile) {
     const result = await client.path.get();
@@ -12741,7 +12742,12 @@ async function markMessageAsRead(client, recipient, timestamp) {
   stmt.run(recipient.toLowerCase(), timestamp);
 }
 function startMailWatch(client, recipient, sessionId, instructions) {
-  if (activeWatches.has(recipient)) {
+  const existingWatch = activeWatches.get(recipient);
+  if (existingWatch) {
+    existingWatch.refCount++;
+    const sessionWatches2 = watchesBySession.get(sessionId) ?? new Set;
+    sessionWatches2.add(recipient);
+    watchesBySession.set(sessionId, sessionWatches2);
     return;
   }
   const interval = setInterval(async () => {
@@ -12762,7 +12768,10 @@ function startMailWatch(client, recipient, sessionId, instructions) {
       console.error(`[Mailbox] Error watching mail for ${recipient}:`, error45);
     }
   }, 5000);
-  activeWatches.set(recipient, { interval, instructions });
+  activeWatches.set(recipient, { interval, instructions, refCount: 1 });
+  const sessionWatches = watchesBySession.get(sessionId) ?? new Set;
+  sessionWatches.add(recipient);
+  watchesBySession.set(sessionId, sessionWatches);
 }
 function stopMailWatch(recipient) {
   const watch = activeWatches.get(recipient);
@@ -12799,7 +12808,12 @@ ${message.message}
         await client.session.prompt({
           path: { id: sessionId },
           body: {
-            parts: [{ type: "text", text: "You have new mail. Please review the injected message above and respond accordingly." }]
+            parts: [
+              {
+                type: "text",
+                text: "You have new mail. Please review the injected message above and respond accordingly."
+              }
+            ]
           }
         });
       }
@@ -12843,16 +12857,27 @@ var mailboxPlugin = async (ctx) => {
     }
   });
   const stopWatchingMailTool = tool3({
-    description: "Stop all mail watching",
+    description: "Stop all mail watching for this session",
     args: {},
-    async execute() {
+    async execute(_args, toolCtx) {
+      const sessionId = toolCtx.sessionID;
       const stoppedWatches = [];
-      for (const recipient of activeWatches.keys()) {
-        stopMailWatch(recipient);
-        stoppedWatches.push(recipient);
+      const sessionWatches = watchesBySession.get(sessionId);
+      if (sessionWatches) {
+        for (const recipient of sessionWatches) {
+          const watch = activeWatches.get(recipient);
+          if (watch) {
+            watch.refCount--;
+            if (watch.refCount <= 0) {
+              stopMailWatch(recipient);
+            }
+            stoppedWatches.push(recipient);
+          }
+        }
+        watchesBySession.delete(sessionId);
       }
       if (stoppedWatches.length === 0) {
-        return "No active mail watches found.";
+        return "No active mail watches found for this session.";
       }
       return `Stopped watching mail for: ${stoppedWatches.join(", ")}`;
     }
@@ -12869,10 +12894,21 @@ var mailboxPlugin = async (ctx) => {
       input.experimental.primary_tools.push("send_mail", "watch_unread_mail", "stop_watching_mail");
     },
     hooks: {
-      "session.end": async () => {
-        for (const recipient of activeWatches.keys()) {
-          stopMailWatch(recipient);
+      "session.end": async (input) => {
+        const sessionId = input.sessionID;
+        const sessionWatches = watchesBySession.get(sessionId);
+        if (!sessionWatches)
+          return;
+        for (const recipient of sessionWatches) {
+          const watch = activeWatches.get(recipient);
+          if (watch) {
+            watch.refCount--;
+            if (watch.refCount <= 0) {
+              stopMailWatch(recipient);
+            }
+          }
         }
+        watchesBySession.delete(sessionId);
       }
     }
   };
