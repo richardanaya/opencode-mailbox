@@ -426,12 +426,43 @@ const mailboxPlugin: Plugin = async (ctx) => {
     },
   });
 
+  const checkMailboxWatchStatusTool = tool({
+    description:
+      "Check the watch status for a specific agent name (recipient). Returns whether the agent is being watched and how many sessions are watching it.",
+    args: {
+      name: z
+        .string()
+        .describe(
+          "Name of the agent/recipient to check watch status for. Note: this does NOT have to be an email. It can just be a name (e.g. 'samus').",
+        ),
+    },
+    async execute(args) {
+      const name = args.name.toLowerCase();
+      const watch = activeWatches.get(name);
+
+      if (!watch) {
+        return `No active watch found for "${args.name}"`;
+      }
+
+      // Count how many sessions are watching this recipient
+      let sessionCount = 0;
+      for (const [, recipients] of watchesBySession) {
+        if (recipients.has(name)) {
+          sessionCount++;
+        }
+      }
+
+      return `"${args.name}" is being watched by ${watch.refCount} session reference(s) (${sessionCount} unique session(s)) with instructions: ${watch.instructions}`;
+    },
+  });
+
   return {
     // Register tools
     tool: {
       send_mail: sendMailTool,
       watch_unread_mail: watchUnreadMailTool,
       stop_watching_mail: stopWatchingMailTool,
+      check_mailbox_watch_status: checkMailboxWatchStatusTool,
     },
 
     // Hook: Add tools to primary_tools config
@@ -445,6 +476,7 @@ const mailboxPlugin: Plugin = async (ctx) => {
         "send_mail",
         "watch_unread_mail",
         "stop_watching_mail",
+        "check_mailbox_watch_status",
       );
     },
 

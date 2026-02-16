@@ -12921,16 +12921,37 @@ var mailboxPlugin = async (ctx) => {
       return `Stopped watching mail for: ${stoppedWatches.join(", ")}`;
     }
   });
+  const checkMailboxWatchStatusTool = tool3({
+    description: "Check the watch status for a specific agent name (recipient). Returns whether the agent is being watched and how many sessions are watching it.",
+    args: {
+      name: z.string().describe("Name of the agent/recipient to check watch status for. Note: this does NOT have to be an email. It can just be a name (e.g. 'samus').")
+    },
+    async execute(args) {
+      const name = args.name.toLowerCase();
+      const watch = activeWatches.get(name);
+      if (!watch) {
+        return `No active watch found for "${args.name}"`;
+      }
+      let sessionCount = 0;
+      for (const [, recipients] of watchesBySession) {
+        if (recipients.has(name)) {
+          sessionCount++;
+        }
+      }
+      return `"${args.name}" is being watched by ${watch.refCount} session reference(s) (${sessionCount} unique session(s)) with instructions: ${watch.instructions}`;
+    }
+  });
   return {
     tool: {
       send_mail: sendMailTool,
       watch_unread_mail: watchUnreadMailTool,
-      stop_watching_mail: stopWatchingMailTool
+      stop_watching_mail: stopWatchingMailTool,
+      check_mailbox_watch_status: checkMailboxWatchStatusTool
     },
     config: async (input) => {
       input.experimental ??= {};
       input.experimental.primary_tools ??= [];
-      input.experimental.primary_tools.push("send_mail", "watch_unread_mail", "stop_watching_mail");
+      input.experimental.primary_tools.push("send_mail", "watch_unread_mail", "stop_watching_mail", "check_mailbox_watch_status");
     },
     hooks: {
       "session.end": async (input) => {
