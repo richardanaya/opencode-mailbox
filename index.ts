@@ -30,6 +30,41 @@ const activeWatches = new Map<
 // sessionId -> Set of recipients this session is watching
 const watchesBySession = new Map<string, Set<string>>();
 
+/**
+ * Reset the database connection. Called when we detect the database file
+ * has been deleted or the connection has become invalid.
+ */
+function resetDatabaseConnection(): void {
+  if (db) {
+    try {
+      db.close();
+    } catch {
+      // Ignore errors when closing an already invalid connection
+    }
+    db = null;
+  }
+}
+
+/**
+ * Check if a database error is due to a missing or deleted database file.
+ * SQLite errors when the file is deleted out from under the connection.
+ */
+function isDatabaseFileError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const message = error.message.toLowerCase();
+  // Common SQLite errors when database file is missing/invalid
+  return (
+    message.includes("database disk image is malformed") ||
+    message.includes("no such table") ||
+    message.includes("unable to open database file") ||
+    message.includes("database is locked") ||
+    message.includes("disk i/o error") ||
+    message.includes("no more rows available") ||
+    message.includes("unable to close") ||
+    message.includes("bad parameter or other api misuse")
+  );
+}
+
 async function getDbFile(
   client: ReturnType<typeof createOpencodeClient>,
 ): Promise<string> {
@@ -176,6 +211,15 @@ function startMailWatch(
         );
       }
     } catch (error) {
+      // Check if this is a database file error (e.g., mailbox.db was deleted)
+      if (isDatabaseFileError(error)) {
+        console.error(
+          `[Mailbox] Database file error for ${recipient}, resetting connection...`,
+        );
+        resetDatabaseConnection();
+        // Don't log as a persistent error - the next poll will recreate the DB
+        return;
+      }
       console.error(`[Mailbox] Error watching mail for ${recipient}:`, error);
     }
   }, 5000); // Poll every 5 seconds
@@ -300,7 +344,21 @@ const mailboxPlugin: Plugin = async (ctx) => {
       const timestamp = Date.now();
 
       // Store the message in SQLite
-      await addMessage(client, to, from, args.message, timestamp);
+      try {
+        await addMessage(client, to, from, args.message, timestamp);
+      } catch (error) {
+        // Check if this is a database file error (e.g., mailbox.db was deleted)
+        if (isDatabaseFileError(error)) {
+          console.error(
+            `[Mailbox] Database file error while sending mail, resetting connection...`,
+          );
+          resetDatabaseConnection();
+          // Retry once after resetting the connection
+          await addMessage(client, to, from, args.message, timestamp);
+        } else {
+          throw error;
+        }
+      }
 
       return `Mail sent to "${args.to}" from "${args.from}" at ${new Date(timestamp).toISOString()}`;
     },

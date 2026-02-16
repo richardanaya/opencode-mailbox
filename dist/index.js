@@ -12683,6 +12683,20 @@ var dbFile = null;
 var db = null;
 var activeWatches = new Map;
 var watchesBySession = new Map;
+function resetDatabaseConnection() {
+  if (db) {
+    try {
+      db.close();
+    } catch {}
+    db = null;
+  }
+}
+function isDatabaseFileError(error45) {
+  if (!(error45 instanceof Error))
+    return false;
+  const message = error45.message.toLowerCase();
+  return message.includes("database disk image is malformed") || message.includes("no such table") || message.includes("unable to open database file") || message.includes("database is locked") || message.includes("disk i/o error") || message.includes("no more rows available") || message.includes("unable to close") || message.includes("bad parameter or other api misuse");
+}
 async function getDbFile(client) {
   if (!dbFile) {
     const result = await client.path.get();
@@ -12765,6 +12779,11 @@ function startMailWatch(client, recipient, sessionId, instructions) {
         await injectMailMessage(client, sessionId, recipient, message, instructions);
       }
     } catch (error45) {
+      if (isDatabaseFileError(error45)) {
+        console.error(`[Mailbox] Database file error for ${recipient}, resetting connection...`);
+        resetDatabaseConnection();
+        return;
+      }
       console.error(`[Mailbox] Error watching mail for ${recipient}:`, error45);
     }
   }, 5000);
@@ -12839,7 +12858,17 @@ var mailboxPlugin = async (ctx) => {
       const to = args.to.toLowerCase();
       const from = args.from.toLowerCase();
       const timestamp = Date.now();
-      await addMessage(client, to, from, args.message, timestamp);
+      try {
+        await addMessage(client, to, from, args.message, timestamp);
+      } catch (error45) {
+        if (isDatabaseFileError(error45)) {
+          console.error(`[Mailbox] Database file error while sending mail, resetting connection...`);
+          resetDatabaseConnection();
+          await addMessage(client, to, from, args.message, timestamp);
+        } else {
+          throw error45;
+        }
+      }
       return `Mail sent to "${args.to}" from "${args.from}" at ${new Date(timestamp).toISOString()}`;
     }
   });
