@@ -12815,9 +12815,7 @@ ${message.message}
 `;
   }
   injectedText += `---
-[Instructions: ${instructions}]
-
-IMPORTANT: remember in order for a sender to see your response, you must send them a mail back. Respond using markdown. Your markdown front-matter can contain a property "choices" which is an array of choices for the mail sender to choose from.  These choices are optional and shouldn't alter your authentic personality in your responses.`;
+[Instructions: ${instructions}]`;
   try {
     await client.session.prompt({
       path: { id: sessionId },
@@ -12828,24 +12826,17 @@ IMPORTANT: remember in order for a sender to see your response, you must send th
     });
     try {
       const sessionApi = client.session;
-      if (sessionApi.resume) {
-        await sessionApi.resume({
-          path: { id: sessionId },
-          body: {}
-        });
-      } else {
-        await client.session.prompt({
-          path: { id: sessionId },
-          body: {
-            parts: [
-              {
-                type: "text",
-                text: "You have new mail. Please review the injected message above and respond accordingly."
-              }
-            ]
-          }
-        });
-      }
+      await client.session.prompt({
+        path: { id: sessionId },
+        body: {
+          parts: [
+            {
+              type: "text",
+              text: `You have new mail. Please review the injected message above and respond accordingly. Respond using markdown. Your markdown front-matter can contain a property "choices" which is an array of choices for the mail sender to choose from.  These choices are optional and shouldn't alter your authentic personality in your responses. IMPORTANT: remember in order for a sender to see your response, you must send them a mail back using the send mail tool.`
+            }
+          ]
+        }
+      });
     } catch (wakeError) {
       console.warn(`[Mailbox] Failed to wake up session ${sessionId}:`, wakeError);
     }

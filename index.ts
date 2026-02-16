@@ -266,7 +266,7 @@ async function injectMailMessages(
     injectedText += `---\nFrom: ${message.from}\nTo: ${recipient}\nTime: ${timestamp}\n\n${message.message}\n\n`;
   }
   
-  injectedText += `---\n[Instructions: ${instructions}]\n\nIMPORTANT: remember in order for a sender to see your response, you must send them a mail back. Respond using markdown. Your markdown front-matter can contain a property "choices" which is an array of choices for the mail sender to choose from.  These choices are optional and shouldn't alter your authentic personality in your responses.`;
+  injectedText += `---\n[Instructions: ${instructions}]`;
 
   try {
     // Step 1: Inject the message with noReply: true (adds to history without waking)
@@ -283,26 +283,20 @@ async function injectMailMessages(
     try {
       // First try session.resume if available (cleaner way to wake up)
       const sessionApi = client.session as any;
-      if (sessionApi.resume) {
-        await sessionApi.resume({
-          path: { id: sessionId },
-          body: {},
-        });
-      } else {
-        // Fallback: use session.prompt() without noReply to wake up the session
-        // We send a minimal "wake up" message that the session will process
-        await client.session.prompt({
-          path: { id: sessionId },
-          body: {
-            parts: [
-              {
-                type: "text" as const,
-                text: "You have new mail. Please review the injected message above and respond accordingly.",
-              },
-            ],
-          },
-        });
-      }
+     
+      // Fallback: use session.prompt() without noReply to wake up the session
+      // We send a minimal "wake up" message that the session will process
+      await client.session.prompt({
+        path: { id: sessionId },
+        body: {
+          parts: [
+            {
+              type: "text" as const,
+              text: "You have new mail. Please review the injected message above and respond accordingly. Respond using markdown. Your markdown front-matter can contain a property \"choices\" which is an array of choices for the mail sender to choose from.  These choices are optional and shouldn't alter your authentic personality in your responses. IMPORTANT: remember in order for a sender to see your response, you must send them a mail back using the send mail tool.",
+            },
+          ],
+        },
+      });
     } catch (wakeError) {
       console.warn(
         `[Mailbox] Failed to wake up session ${sessionId}:`,
