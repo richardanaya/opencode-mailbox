@@ -12776,8 +12776,8 @@ function startMailWatch(client, recipient, sessionId, instructions) {
       }
       for (const message of unreadMessages) {
         await markMessageAsRead(client, recipient, message.timestamp);
-        await injectMailMessage(client, sessionId, recipient, message, instructions);
       }
+      await injectMailMessages(client, sessionId, recipient, unreadMessages, instructions);
     } catch (error45) {
       if (isDatabaseFileError(error45)) {
         console.error(`[Mailbox] Database file error for ${recipient}, resetting connection...`);
@@ -12799,15 +12799,25 @@ function stopMailWatch(recipient) {
     activeWatches.delete(recipient);
   }
 }
-async function injectMailMessage(client, sessionId, recipient, message, instructions) {
-  const timestamp = new Date(message.timestamp).toISOString();
-  const injectedText = `[MAIL] From: ${message.from}
+async function injectMailMessages(client, sessionId, recipient, messages, instructions) {
+  let injectedText = `[MAIL BATCH] You have ${messages.length} new message(s) for ${recipient}
+
+`;
+  for (const message of messages) {
+    const timestamp = new Date(message.timestamp).toISOString();
+    injectedText += `---
+From: ${message.from}
 To: ${recipient}
 Time: ${timestamp}
 
 ${message.message}
 
-[Instructions: ${instructions}]`;
+`;
+  }
+  injectedText += `---
+[Instructions: ${instructions}]
+
+IMPORTANT: remember in order for a sender to see your response, you must send them a mail back`;
   try {
     await client.session.prompt({
       path: { id: sessionId },

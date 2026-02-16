@@ -196,20 +196,19 @@ function startMailWatch(
         return;
       }
 
-      // Process each unread message
+      // Mark all messages as read first to prevent double-processing
       for (const message of unreadMessages) {
-        // Mark as read immediately to prevent double-processing
         await markMessageAsRead(client, recipient, message.timestamp);
-
-        // Inject the message into the session
-        await injectMailMessage(
-          client,
-          sessionId,
-          recipient,
-          message,
-          instructions,
-        );
       }
+
+      // Inject all messages at once as a single concatenated message
+      await injectMailMessages(
+        client,
+        sessionId,
+        recipient,
+        unreadMessages,
+        instructions,
+      );
     } catch (error) {
       // Check if this is a database file error (e.g., mailbox.db was deleted)
       if (isDatabaseFileError(error)) {
@@ -244,24 +243,30 @@ function stopMailWatch(recipient: string): void {
 }
 
 /**
- * Inject a mail message into a session using client.session.prompt()
+ * Inject mail messages into a session using client.session.prompt()
  * This mimics how pocket-universe injects messages.
+ * All messages are concatenated into a single injection.
  *
- * IMPORTANT: After injecting the message, we also need to "wake up" the session
+ * IMPORTANT: After injecting the messages, we also need to "wake up" the session
  * so it starts processing. This is done by calling session.prompt() again
  * without noReply: true, or by using session.resume if available.
  */
-async function injectMailMessage(
+async function injectMailMessages(
   client: ReturnType<typeof createOpencodeClient>,
   sessionId: string,
   recipient: string,
-  message: MailMessage,
+  messages: MailMessage[],
   instructions: string,
 ): Promise<void> {
-  const timestamp = new Date(message.timestamp).toISOString();
-
-  // Format the injected message
-  const injectedText = `[MAIL] From: ${message.from}\nTo: ${recipient}\nTime: ${timestamp}\n\n${message.message}\n\n[Instructions: ${instructions}]`;
+  // Build concatenated message text
+  let injectedText = `[MAIL BATCH] You have ${messages.length} new message(s) for ${recipient}\n\n`;
+  
+  for (const message of messages) {
+    const timestamp = new Date(message.timestamp).toISOString();
+    injectedText += `---\nFrom: ${message.from}\nTo: ${recipient}\nTime: ${timestamp}\n\n${message.message}\n\n`;
+  }
+  
+  injectedText += `---\n[Instructions: ${instructions}]\n\nIMPORTANT: remember in order for a sender to see your response, you must send them a mail back`;
 
   try {
     // Step 1: Inject the message with noReply: true (adds to history without waking)
