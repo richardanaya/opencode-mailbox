@@ -266,7 +266,7 @@ async function injectMailMessages(
     injectedText += `---\nFrom: ${message.from}\nTo: ${recipient}\nTime: ${timestamp}\n\n${message.message}\n\n`;
   }
   
-  injectedText += `---\n[Instructions: ${instructions}]\n\nIMPORTANT: remember in order for a sender to see your response, you must send them a mail back`;
+  injectedText += `---\n[Instructions: ${instructions}]\n\nIMPORTANT: remember in order for a sender to see your response, you must send them a mail back. Respond using markdown. Your markdown front-matter can contain a property "choices" which is an array of choices for the mail sender to choose from`;
 
   try {
     // Step 1: Inject the message with noReply: true (adds to history without waking)

@@ -12817,7 +12817,7 @@ ${message.message}
   injectedText += `---
 [Instructions: ${instructions}]
 
-IMPORTANT: remember in order for a sender to see your response, you must send them a mail back`;
+IMPORTANT: remember in order for a sender to see your response, you must send them a mail back. Respond using markdown. Your markdown front-matter can contain a property "choices" which is an array of choices for the mail sender to choose from`;
   try {
     await client.session.prompt({
       path: { id: sessionId },
