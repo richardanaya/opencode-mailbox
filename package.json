@@ -1,6 +1,6 @@
 {
   "name": "opencode-mailbox",
-  "version": "0.0.12",
+  "version": "0.0.13",
   "description": "A simple mailbox system for sending and receiving messages between sessions",
   "type": "module",
   "main": "./dist/index.js",

@@ -292,7 +292,7 @@ async function injectMailMessages(
           parts: [
             {
               type: "text" as const,
-              text: "You have new mail. Please review the injected message above and respond accordingly. Respond using markdown. Your markdown front-matter can contain a property \"choices\" which is an array of choices for the mail sender to choose from.  These choices are optional and shouldn't alter your authentic personality in your responses. IMPORTANT: remember in order for a sender to see your response, you must send them a mail back using the send mail tool.",
+              text: "You have new mail. Please review the injected message above and respond accordingly. Respond using markdown. Your markdown front-matter can contain a property \"choices\" which is an array of choices for the mail sender to choose from.  These choices are optional and shouldn't alter your authentic personality in your responses. IMPORTANT: remember in order for a sender to see your response, you must send them a mail back using the send mail tool. Also, don't go on for too long if things seem repetitive.",
             },
           ],
         },
